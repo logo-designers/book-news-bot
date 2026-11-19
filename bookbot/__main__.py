@@ -43,6 +43,10 @@ def main() -> None:
             asyncio.run(app.run_bot(settings))
     except ConfigError as exc:
         print(f"Помилка налаштувань: {exc}", file=sys.stderr)
+        if os.getenv("GITHUB_ACTIONS"):
+            # покажеться в Annotations на сторінці запуску
+            print(f"::error title=Помилка налаштувань::{exc}. "
+                  "Перевірте секрети в Settings → Secrets and variables → Actions")
         sys.exit(2)
     except KeyboardInterrupt:
         pass
