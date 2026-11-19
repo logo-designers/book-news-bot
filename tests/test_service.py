@@ -142,3 +142,38 @@ async def test_add_source_via_admin(tmp_path, db, feed_bytes):
     assert src and src.name == "Нове" and "4" in info
     again, info = await svc.add_source("https://new.ua/feed/")
     assert again is None and "вже є" in info
+
+
+async def test_page_image_used_when_feed_has_none(tmp_path, db):
+    feed = wordpress_rss([{"title": "Нова книжка без картинки", "link": "https://example.ua/a/", "desc": "Анонс."}])
+    svc, bot = await make_service(tmp_path, db, feed)
+    svc.fetcher.page_images["https://example.ua/a/"] = "https://example.ua/og.jpg"
+    await svc.fetch_all()
+    assert (await svc.publish_next()).ok
+    assert bot.sent[-1]["kind"] == "photo" and bot.sent[-1]["photo"] == "https://example.ua/og.jpg"
+
+
+async def test_page_images_can_be_disabled(tmp_path, db):
+    feed = wordpress_rss([{"title": "Нова книжка", "link": "https://example.ua/b/", "desc": "Анонс."}])
+    svc, bot = await make_service(tmp_path, db, feed, page_images=False)
+    svc.fetcher.page_images["https://example.ua/b/"] = "https://example.ua/og.jpg"
+    await svc.fetch_all()
+    assert (await svc.publish_next()).ok
+    assert bot.sent[-1]["kind"] == "text"
+
+
+async def test_run_once(tmp_path, feed_bytes, monkeypatch):
+    from bookbot import app
+    (tmp_path / "sources.yaml").write_text(f"sources:\n  - name: Тест\n    url: {FEED_URL}\n", encoding="utf-8")
+    bot = FakeBot()
+    monkeypatch.setattr(app, "Bot", lambda *a, **kw: bot)
+    monkeypatch.setattr(app, "FeedFetcher", lambda *a, **kw: FakeFetcher({FEED_URL: feed_bytes}))
+    settings = make_settings(tmp_path, moderation=True)
+    assert await app.run_once(settings, max_posts=3) == 1  # інтервал між постами дотримано
+    assert bot.sent[-1]["chat_id"] == "@test_channel"
+    # другий запуск одразу після першого: новин не дублює, пост ще не час
+    assert await app.run_once(settings, max_posts=3) == 0
+    assert len(bot.sent) == 1
+    wal = tmp_path / "t.sqlite3-wal"
+    assert (tmp_path / "t.sqlite3").exists()
+    assert not wal.exists() or wal.stat().st_size == 0  # база — один файл, її можна зберегти в git

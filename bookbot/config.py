@@ -30,6 +30,7 @@ class Settings:
     timezone: ZoneInfo
     signature: str
     user_agent: str
+    page_images: bool = True
 
 
 def _int(name: str, default: int, minimum: int = 0) -> int:
@@ -117,6 +118,7 @@ def load_settings(require_token: bool = True) -> Settings:
         quiet_hours=parse_quiet_hours(os.getenv("QUIET_HOURS", "23-8")),
         timezone=tz,
         signature=os.getenv("POST_SIGNATURE", "").strip(),
+        page_images=_bool("PAGE_IMAGES", True),
         user_agent=os.getenv(
             "USER_AGENT",
             "Mozilla/5.0 (compatible; BookNewsBot/1.0; +https://telegram.org)",

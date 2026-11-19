@@ -145,6 +145,8 @@ class Database:
 
     async def close(self) -> None:
         if self._db:
+            # переносимо журнал WAL в основний файл, щоб база була одним файлом
+            await self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             await self._db.close()
             self._db = None
 

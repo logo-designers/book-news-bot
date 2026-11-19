@@ -15,6 +15,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("run", help="запустити бота (за замовчуванням)")
     sub.add_parser("check", help="перевірити всі джерела з sources.yaml")
+    o = sub.add_parser("once", help="один прохід: зібрати новини й опублікувати пост (для cron / GitHub Actions)")
+    o.add_argument("--max-posts", type=int, default=1)
     p = sub.add_parser("preview", help="показати, як виглядатимуть пости, нічого не надсилаючи")
     p.add_argument("-n", "--limit", type=int, default=5)
     args = parser.parse_args()
@@ -24,15 +26,17 @@ def main() -> None:
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    if cmd != "run":
+    if cmd in ("check", "preview"):
         logging.getLogger().setLevel(logging.WARNING)
 
     try:
-        settings = load_settings(require_token=(cmd == "run"))
+        settings = load_settings(require_token=(cmd in ("run", "once")))
         from . import app  # імпорт тут, щоб помилки конфігурації показувались зрозуміло
 
         if cmd == "check":
             sys.exit(1 if asyncio.run(app.check_sources(settings)) else 0)
+        elif cmd == "once":
+            asyncio.run(app.run_once(settings, args.max_posts))
         elif cmd == "preview":
             asyncio.run(app.preview_posts(settings, args.limit))
         else:

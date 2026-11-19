@@ -5,6 +5,7 @@ import asyncio
 import html
 import logging
 import re
+from dataclasses import replace
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -83,6 +84,45 @@ async def _check_channel_rights(bot: Bot, service: NewsService, bot_id: int) -> 
         log.info("Доступ до каналу «%s» є", chat.title)
 
 
+async def run_once(settings: Settings, max_posts: int = 1) -> int:
+    """Один прохід без постійної роботи: зібрати новини й опублікувати до max_posts постів.
+
+    Для запуску за розкладом (GitHub Actions, cron). Команди адміна й кнопки модерації
+    в цьому режимі не працюють, тому модерація вимикається.
+    """
+    if settings.moderation:
+        log.warning("У режимі once модерація недоступна — новини публікуються автоматично")
+    settings = replace(settings, moderation=False)
+    sources = load_sources(settings.sources_file)
+    db = Database(settings.db_path)
+    await db.connect()
+    fetcher = FeedFetcher(settings.user_agent)
+    bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    posted = 0
+    try:
+        service = NewsService(settings, db, bot, sources, fetcher)
+        await service.setup()
+        report = await service.fetch_all()
+        for r in report.sources:
+            log.info("%s %s: %s", "🔴" if r.error else "🟢", r.name, r.error or f"+{r.new}")
+        log.info("Нових новин: %s, у черзі: %s", report.total_new, (await db.counts()).get("queued", 0))
+        for _ in range(max_posts):
+            if not await service.is_publish_due():
+                log.info("Ще не час для наступного поста (інтервал %s хв)", settings.post_interval_min)
+                break
+            result = await service.publish_next()
+            if not result.ok:
+                log.info("Не публікую: %s", result.reason)
+                break
+            posted += 1
+            log.info("Опубліковано: %s", result.item.title)
+    finally:
+        await bot.session.close()
+        await fetcher.close()
+        await db.close()
+    return posted
+
+
 # ---------------------------------------------------------------- CLI helpers
 
 async def check_sources(settings: Settings) -> int:
@@ -151,6 +191,11 @@ async def preview_posts(settings: Settings, limit: int = 5) -> None:
     if not collected:
         print("Свіжих новин, що проходять фільтри, не знайдено.")
         return
+    if settings.page_images:
+        async with FeedFetcher(settings.user_agent) as fetcher:
+            for e, _, _ in collected[:limit]:
+                if not e.image_url:
+                    e.image_url = await fetcher.page_image(e.link)
     for e, src, tags in collected[:limit]:
         post = build_post(title=e.title, link=e.link, summary=e.summary, source_name=src.name,
                           origin=e.origin, image_url=e.image_url, tags=tags, signature=settings.signature)

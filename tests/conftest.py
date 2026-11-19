@@ -78,9 +78,13 @@ SAMPLE_ITEMS = [
 
 
 class FakeFetcher:
-    def __init__(self, feeds: dict[str, bytes]) -> None:
+    def __init__(self, feeds: dict[str, bytes], page_images: dict[str, str] | None = None) -> None:
         self.feeds = feeds
+        self.page_images = page_images or {}
         self.calls: list[str] = []
+
+    async def page_image(self, url):
+        return self.page_images.get(url)
 
     async def get(self, url, etag=None, last_modified=None):
         self.calls.append(url)
@@ -95,6 +99,12 @@ class FakeFetcher:
     async def close(self):
         pass
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        pass
+
 
 class FakeBot:
     def __init__(self, photo_fails: bool = False) -> None:
@@ -102,6 +112,10 @@ class FakeBot:
         self.edited: list[dict] = []
         self.photo_fails = photo_fails
         self._ids = itertools.count(100)
+        self.session = SimpleNamespace(close=self._noop)
+
+    async def _noop(self):
+        pass
 
     async def send_photo(self, chat_id, photo, caption=None, reply_markup=None, **kw):
         if self.photo_fails:

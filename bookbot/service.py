@@ -175,11 +175,16 @@ class NewsService:
         if await self.db.seen(entry.uid, tkey, now - DEDUP_WINDOW):
             return False
 
+        image_url = entry.image_url
+        if not image_url and self.settings.page_images:
+            # у стрічці картинки немає — беремо головне зображення зі сторінки статті
+            image_url = await self.fetcher.page_image(entry.link)
+
         tags = list(dict.fromkeys(auto_tags(text, self.sources.tag_rules) + src.tags))[:MAX_TAGS]
         status = "review" if self.settings.moderation else "queued"
         item_id = await self.db.add_item(
             source_id=src.id, uid=entry.uid, title=entry.title, title_key=tkey, link=entry.link,
-            summary=entry.summary, image_url=entry.image_url, origin=entry.origin, tags=tags,
+            summary=entry.summary, image_url=image_url, origin=entry.origin, tags=tags,
             published_at=entry.published or now, status=status,
         )
         if item_id is None:

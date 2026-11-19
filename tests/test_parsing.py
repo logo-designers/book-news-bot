@@ -121,3 +121,14 @@ def test_broken_html_does_not_crash():
     xml = wordpress_rss([{"title": "Тест <b>жирний", "link": "https://e.ua/1", "desc": "<p>незакритий <div><img src=x"}])
     feed = parse_feed(xml, "https://e.ua/")
     assert feed.entries[0].title  # не впали
+
+
+def test_page_main_image():
+    from bookbot.feeds import page_main_image
+    page = """<html><head>
+      <meta name="twitter:image" content="https://cdn.ua/tw.jpg">
+      <meta property="og:image" content="/uploads/cover.jpg">
+    </head></html>"""
+    assert page_main_image(page, "https://site.ua/news/1") == "https://site.ua/uploads/cover.jpg"
+    assert page_main_image('<meta property="og:image" content="/img/logo.png">', "https://s.ua/") is None
+    assert page_main_image("<html></html>", "https://s.ua/") is None

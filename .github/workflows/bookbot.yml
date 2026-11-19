@@ -1,0 +1,69 @@
+name: Книжкові новини
+
+# Бот запускається кожні 30 хвилин: збирає новини й публікує один пост.
+# Потрібні секрети репозиторію: BOT_TOKEN і CHANNEL_ID (Settings → Secrets and variables → Actions).
+on:
+  schedule:
+    - cron: "7,37 * * * *"   # час UTC; тихі години рахуються за TIMEZONE
+  workflow_dispatch:          # кнопка «Run workflow» для ручного запуску
+
+permissions:
+  contents: write             # щоб зберігати базу в гілці bot-state
+
+concurrency:
+  group: bookbot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Встановити залежності
+        run: pip install -r requirements.txt
+
+      - name: Відновити базу з гілки bot-state
+        run: |
+          mkdir -p data
+          if git fetch --depth=1 origin bot-state 2>/dev/null; then
+            git show FETCH_HEAD:bookbot.sqlite3 > data/bookbot.sqlite3 || rm -f data/bookbot.sqlite3
+            echo "База відновлена"
+          else
+            echo "Перший запуск — база буде створена"
+          fi
+
+      - name: Зібрати новини й опублікувати
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          DB_PATH: data/bookbot.sqlite3
+          # Необов'язкові налаштування: Settings → Secrets and variables → Actions → Variables
+          POST_INTERVAL_MIN: ${{ vars.POST_INTERVAL_MIN || '25' }}
+          QUIET_HOURS: ${{ vars.QUIET_HOURS || '23-8' }}
+          TIMEZONE: ${{ vars.TIMEZONE || 'Europe/Kyiv' }}
+          MAX_POSTS_PER_DAY: ${{ vars.MAX_POSTS_PER_DAY || '0' }}
+          MAX_AGE_DAYS: ${{ vars.MAX_AGE_DAYS || '3' }}
+          POST_SIGNATURE: ${{ vars.POST_SIGNATURE || '' }}
+          PAGE_IMAGES: ${{ vars.PAGE_IMAGES || 'true' }}
+        run: python -m bookbot once
+
+      - name: Зберегти базу в гілку bot-state
+        if: always() && hashFiles('data/bookbot.sqlite3') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd data
+          git init -q -b bot-state
+          git config user.name "bookbot"
+          git config user.email "bookbot@users.noreply.github.com"
+          git add bookbot.sqlite3
+          git commit -q -m "Стан бота $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" bot-state

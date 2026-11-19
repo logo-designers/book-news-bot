@@ -146,6 +146,51 @@ class _FeedLinkFinder(HTMLParser):
             self.links.append(a["href"])
 
 
+class _MetaImageFinder(HTMLParser):
+    """Шукає головну картинку сторінки: og:image → twitter:image → link rel=image_src."""
+    KEYS = ("og:image:secure_url", "og:image", "og:image:url", "twitter:image", "twitter:image:src")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.found: dict[str, str] = {}
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        if tag == "meta":
+            key = (a.get("property") or a.get("name") or "").lower()
+            if key in self.KEYS and a.get("content") and key not in self.found:
+                self.found[key] = a["content"].strip()
+        elif tag == "link" and a.get("rel", "").lower() == "image_src" and a.get("href"):
+            self.found.setdefault("image_src", a["href"].strip())
+
+    def best(self) -> str | None:
+        for key in (*self.KEYS, "image_src"):
+            if self.found.get(key):
+                return self.found[key]
+        return None
+
+
+# Сторінки, з яких картинку брати немає сенсу (там лише логотип сервісу)
+_NO_PAGE_IMAGE_HOSTS = ("news.google.com", "t.me", "facebook.com", "instagram.com")
+
+
+def page_main_image(page_html: str, base_url: str) -> str | None:
+    finder = _MetaImageFinder()
+    try:
+        finder.feed(page_html)
+    except Exception:  # noqa: BLE001
+        return None
+    img = finder.best()
+    if not img:
+        return None
+    img = urljoin(base_url, img)
+    if not img.startswith(("http://", "https://")) or img.lower().endswith(".svg"):
+        return None
+    if any(w in img.lower() for w in ("logo", "favicon", "default-og", "placeholder")):
+        return None
+    return img
+
+
 def discover_feed_links(page_html: str, base_url: str) -> list[str]:
     finder = _FeedLinkFinder()
     try:
@@ -303,6 +348,22 @@ class FeedFetcher:
                 last_modified=resp.headers.get("Last-Modified"),
                 content_type=resp.headers.get("Content-Type", ""),
             )
+
+    async def page_image(self, url: str, max_bytes: int = 400_000) -> str | None:
+        """Головна картинка статті (og:image). Будь-яка помилка → None: це лише прикраса."""
+        if any(h in url for h in _NO_PAGE_IMAGE_HOSTS):
+            return None
+        await self.start()
+        assert self._session is not None
+        try:
+            async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                if resp.status >= 400 or "html" not in resp.headers.get("Content-Type", "html"):
+                    return None
+                raw = await resp.content.read(max_bytes)
+                charset = resp.charset or "utf-8"
+                return page_main_image(raw.decode(charset, "replace"), str(resp.url))
+        except Exception:  # noqa: BLE001
+            return None
 
     async def resolve_feed(self, url: str) -> tuple[str, ParsedFeed]:
         """Повертає (адреса_стрічки, розібрана_стрічка). Якщо дали адресу сайту — шукає RSS на сторінці."""
